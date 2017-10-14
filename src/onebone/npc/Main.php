@@ -151,14 +151,13 @@ class Main extends PluginBase{
 					$current = (int)ceil(++$n / 5);
 
 					if($current === $page){
-						$output .= "§7["
-							. $npc->getLevel()->getName() . "."
-							. round($npc->x, 2) . "."
-							. round($npc->y, 2) . "."
-							. round($npc->z, 2) . "."
-						. "]"
-						. " NPC 이름 : " . $npc->getNameTag()
+						$output .= 
+						"NPC 이름 : " . $npc->getNameTag()
 						. ", NPC ID : " . $npc->getId()
+						. ", 월드 : " . $npc->getLevel()->getName()
+						. ", x : " . round($npc->x, 2)
+						. ", y : " . round($npc->y, 2)
+						. ", z : " . round($npc->z, 2)
 						. "\n";
 					}elseif($current > $page) break;
 				}
