@@ -19,251 +19,241 @@
 
 namespace onebone\npc;
 
-use pocketmine\event\TranslationContainer;
+use pocketmine\Player;
 use pocketmine\plugin\PluginBase;
 use pocketmine\command\CommandSender;
 use pocketmine\command\Command;
-use pocketmine\level\Location;
-use pocketmine\utils\TextFormat;
-use pocketmine\event\Listener;
-use pocketmine\event\server\DataPacketReceiveEvent;
+use pocketmine\entity\Entity;
+use pocketmine\event\player\PlayerJoinEvent;
 use pocketmine\event\player\PlayerMoveEvent;
 use pocketmine\event\entity\EntityTeleportEvent;
-use pocketmine\event\player\PlayerJoinEvent;
-use pocketmine\network\mcpe\protocol\InteractPacket;
-use pocketmine\Player;
+use pocketmine\event\server\DataPacketReceiveEvent;
+use pocketmine\nbt\tag\CompoundTag;
+use pocketmine\nbt\tag\ListTag;
+use pocketmine\nbt\tag\DoubleTag;
+use pocketmine\nbt\tag\FloatTag;
 
-class Main extends PluginBase implements Listener{
-	/** @var NPC[] */
-	private $npc = [];
-	private $msgQueue = [], $cmdQueue = [];
+
+class Main extends PluginBase{
+
+	public static $prefix = "§b§l[NPC] §r§7";
+
+	public function onLoad(){
+		Entity::registerEntity(NPC::class, true);
+	}
 
 	public function onEnable(){
-		if(!file_exists($this->getDataFolder())){
-			mkdir($this->getDataFolder());
-		}
-		$this->saveDefaultConfig();
 
-		if(!file_exists($this->getDataFolder()."skins")){
-			mkdir($this->getDataFolder()."skins");
-		}
-		if(!is_file($this->getDataFolder()."npc.dat")){
-			file_put_contents($this->getDataFolder()."npc.dat", serialize([]));
-		}
-		$data = unserialize(file_get_contents($this->getDataFolder()."npc.dat"));
-		$this->npc = [];
-
-		foreach($data as $datam){
-			$skinFile = $this->getDataFolder()."skins/".$datam[6].".skin";
-			$datam[6] = file_get_contents($skinFile);
-			$npc = NPC::createNPC($this, $datam);
-			$this->npc[$npc->getId()] = $npc;
-		}
-
-		$this->getServer()->getPluginManager()->registerEvents($this, $this);
 	}
 
-	public function onPacketReceived(DataPacketReceiveEvent $event){
-		$pk = $event->getPacket();
-		if($pk instanceof InteractPacket and $pk->action === InteractPacket::ACTION_LEFT_CLICK){
-			if(isset($this->npc[$pk->target])){
-				$npc = $this->npc[$pk->target];
-
-				if(!isset($this->msgQueue[$event->getPlayer()->getName()]) and !isset($this->cmdQueue[$event->getPlayer()->getName()])){
-					$npc->onInteract($event->getPlayer());
-					return;
-				}
-
-				if(isset($this->msgQueue[$event->getPlayer()->getName()])){
-					$npc->setMessage($this->msgQueue[$event->getPlayer()->getName()]);
-					unset($this->msgQueue[$event->getPlayer()->getName()]);
-					$event->getPlayer()->sendMessage("You have set NPC ".TextFormat::AQUA.$npc->getName().TextFormat::WHITE." to say ".TextFormat::GREEN.$npc->getMessage());
-				}
-
-				if(isset($this->cmdQueue[$event->getPlayer()->getName()])){
-					$npc->setCommand($this->cmdQueue[$event->getPlayer()->getName()]);
-					unset($this->cmdQueue[$event->getPlayer()->getName()]);
-
-					$event->getPlayer()->sendMessage("You have set NPC " . TextFormat::AQUA . $npc->getName() . TextFormat::WHITE . " to execute command " . TextFormat::GREEN . "/" . $npc->getCommand());
-				}
-			}
-		}
-	}
-
-	public function onPlayerJoin(PlayerJoinEvent $event){
-		foreach($this->npc as $npc){
-			if($npc->getLevel()->getFolderName() === $event->getPlayer()->getLevel()->getFolderName()){
-				$npc->spawnTo($event->getPlayer());
-			}
-		}
-	}
-
-	public function onMoveEvent(PlayerMoveEvent $event){
-		$player = $event->getPlayer();
-
-		foreach($this->npc as $npc){
-			if($npc->getLevel()->getFolderName() === $event->getPlayer()->getLevel()->getFolderName()){
-				$npc->seePlayer($player);
-			}
-		}
-	}
-
-	public function onEntityTeleport(EntityTeleportEvent $event){
-		$player = $event->getEntity();
-
-		if($player instanceof Player){
-			if($event->getFrom()->getLevel()->getFolderName() !== ($toLevel = $event->getTo()->getLevel()->getFolderName())){
-				foreach($this->npc as $npc){
-					if($npc->getLevel()->getFolderName() === $toLevel){
-						$npc->spawnTo($player);
-					}else{
-						$npc->removeFrom($player);
-					}
-				}
-			}
-		}
-	}
-
-	public function onCommand(CommandSender $sender, Command $command, $label, array $params) : bool {
-		switch($command->getName()){
-			case "npc":
-			switch(strtolower(array_shift($params))){
-				case "create":
-				case "c":
-					if(!$sender instanceof Player){
-						$sender->sendMessage(TextFormat::RED . "Please run this command in-game.");
-						return true;
-					}
-
-					if(!$sender->hasPermission("npc.command.npc.create")){
-						$sender->sendMessage(new TranslationContainer(TextFormat::RED . "%commands.generic.permission"));
-						return true;
-					}
-
-					$name = implode(" ", $params);
-					if(trim($name) === ""){
-						$sender->sendMessage(TextFormat::RED."Usage: /npc create <name>");
-						return true;
-					}
-					$location = new Location($sender->getX(), $sender->getY(), $sender->getZ(), -1, -1, $sender->getLevel());
-
-					$npc = new NPC($this, clone $location, $name, $sender->getSkinData(), $sender->getSkinId(), $sender->getInventory()->getItemInHand());
-					$this->npc[$npc->getId()] = $npc;
-					foreach($sender->getLevel()->getPlayers() as $player){
-						$npc->spawnTo($player);
-					}
-
-					if($this->getConfig()->get("save-on-change")){
-						$this->save();
-					}
+	public function onCommand(CommandSender $sender, Command $command, string $label, array $params) : bool{
+		switch(strtolower(array_shift($params))){
+			case "create":
+			case "c":
+				if(!$sender instanceof Player){
+					$sender->sendMessage(Main::$prefix . "인게임에서만 사용 가능합니다.");
 					return true;
-					case "remove":
-					case "r":
-					if(!$sender->hasPermission("npc.command.npc.remove")){
-						$sender->sendMessage(new TranslationContainer(TextFormat::RED . "%commands.generic.permission"));
-						return true;
-					}
+				}
+				if(!$sender->hasPermission("npc.command.npc.create")){
+					$sender->sendMessage(Main::$prefix . "이 명령을 사용할 권한이 없습니다.");
+					return true;
+				}
+				$name = implode(" ", $params);
+				if(trim($name) === ""){
+					$sender->sendMessage(Main::$prefix . "사용법 : /npc create <name> - NPC를 생성합니다.");
+					return true;
+				}
 
+				$npc = Entity::createEntity("NPC", $sender->getLevel(), new CompoundTag("", [
+					new ListTag("Pos", [
+						new DoubleTag("", $sender->x),
+						new DoubleTag("", $sender->y),
+						new DoubleTag("", $sender->z)
+					]),
+					new ListTag("Motion", [
+						new DoubleTag("", 0),
+						new DoubleTag("", 0),
+						new DoubleTag("", 0)
+					]),
+					new ListTag("Rotation", [
+						new FloatTag("", $sender->yaw),
+						new FLoatTag("", $sender->pitch)
+					])
+				]));
+
+				$npc->setNameTag($name);
+				$npc->setRotation($sender->yaw, $sender->pitch);
+				$npc->setSkin(clone $sender->getSkin());
+				$npc->getInventory()->setItemInHand($sender->getInventory()->getItemInHand());
+				$npc->getInventory()->setArmorContents($sender->getInventory()->getArmorContents());
+				$npc->spawnToAll();
+
+				$sender->sendMessage(Main::$prefix . "NPC \"" . $npc->getNameTag() . "\" 을(를) 생성하였습니다.");
+				break;
+
+			case "remove":
+			case "r":
+				if(!$sender->hasPermission("npc.command.npc.remove")){
+					$sender->sendMessage(Main::$prefix . "이 명령을 사용할 권한이 없습니다.");
+					return true;
+				}
+				if(!empty($params)){
 					$id = array_shift($params);
-					if(!is_numeric($id)){
-						$sender->sendMessage(TextFormat::RED."Usage: /npc remove <id>");
+					if(!preg_match("/[0-9]+/", $id)){
+						$sender->sendMessage(Main::$prefix . "사용법 : /npc remove [id] - 해당 id의 NPC를 삭제합니다. 인자를 입력하지 않을 시, 터치하여 NPC를 삭제할 수 있습니다.");
 						return true;
 					}
-
-					foreach($this->npc as $key => $npc){
-						if($id == $npc->getId()){
-							$npc->remove();
-							unset($this->npc[$key]);
-							$sender->sendMessage("Removed NPC ".TextFormat::AQUA.$npc->getName());
-							if($this->getConfig()->get("save-on-change")){
-								$this->save();
-							}
-							return true;
-						}
-					}
-					$sender->sendMessage("Could not find NPC ".TextFormat::RED.$id);
-				return true;
-				case "list":
-				case "ls":
-				case "l":
-					if(!$sender->hasPermission("npc.command.npc.list")){
-						$sender->sendMessage(new TranslationContainer(TextFormat::RED . "%commands.generic.permission"));
+					$npc = $this->getServer()->findEntity($id);
+					if(!$npc instanceof NPC){
+						$sender->sendMessage(Main::$prefix . "해당 id의 NPC를 찾을 수 없습니다.");
 						return true;
 					}
+					$sender->sendMessage(Main::$prefix . "NPC \"" . $npc->getNameTag() . "\" 을(를) 제거하였습니다.");
+					$npc->close();
 
-					$page = array_shift($params);
-					if(!is_numeric($page)){
-						$page = 1;
+				}else{
+					if(!$sender instanceof Player){
+						$sender->sendMessage(Main::$prefix . "인게임에서만 사용 가능합니다.");
+						return true;
 					}
+					$sender->sendMessage(Main::$prefix . "제거할 NPC를 터치해주세요.");
 
-					$max = ceil(count($this->npc)/5);
-					$page = (int)$page;
-					$page = max(1, min($page, $max));
+					NPC::setQueue($sender, function(NPC $npc) use($sender){
+						$npc->close();
+						$sender->sendMessage(Main::$prefix . "NPC \"" . $npc->getNameTag() . "\" 을(를) 제거하였습니다.");
+						NPC::removeQueue($sender);
+					});
+				}
+				break;
 
-					$output = "Showing NPC list (page $page/$max): \n";
-					$n = 0;
-					foreach($this->npc as $id => $npc){
-						$current = (int)ceil(++$n / 5);
-
-						if($current === $page){
-							$output .= "#".$npc->getId()
-							." (".round($npc->x, 2).":".round($npc->y, 2).":".round($npc->z, 2).":".$npc->getLevel()->getName()."): "
-							.$npc->getName()."\n";
-						}elseif($current > $page) break;
-					}
-					$output = substr($output, 0, -1);
-					$sender->sendMessage($output);
+			case "list":
+			case "ls":
+			case "l":
+				if(!$sender->hasPermission("npc.command.npc.list")){
+					$sender->sendMessage(Main::$prefix . "이 명령을 사용할 권한이 없습니다.");
 					return true;
-				case "message":
-				case "msg":
-				case "m":
-					if(!$sender->hasPermission("npc.command.npc.message")){
-						$sender->sendMessage(new TranslationContainer(TextFormat::RED . "%commands.generic.permission"));
-						return true;
-					}
+				}
 
-					$message = trim(implode(" ", $params));
+				$npcList = array_merge(...array_map(function($level){ return array_filter($level->getEntities(), function($entity){ return $entity instanceof NPC; }); }, $this->getServer()->getLevels()));
 
-					$this->msgQueue[$sender->getName()] = $message;
+				$page = array_shift($params);
+				if(!preg_match("/[0-9]+/", $page)){
+					$page = 1;
+				}
+				$max = ceil(count($npcList)/5);
+				$page = (int)$page;
+				$page = max(1, min($page, $max));
 
-					$sender->sendMessage("Touch NPC you want to set message.");
-					if($this->getConfig()->get("save-on-change")){
-						$this->save();
-					}
+				$output = "§l==========[ NPC 목록 (전체 " . $max . "페이지 중 " . $page . "페이지) ]==========§r\n";
+				$n = 0;
+
+				foreach($npcList as $npc){
+					$current = (int)ceil(++$n / 5);
+
+					if($current === $page){
+						$output .= "§7["
+							. $npc->getLevel()->getName() . "."
+							. round($npc->x, 2) . "."
+							. round($npc->y, 2) . "."
+							. round($npc->z, 2) . "."
+						. "]"
+						. " NPC 이름 : " . $npc->getNameTag()
+						. ", NPC ID : " . $npc->getId()
+						. "\n";
+					}elseif($current > $page) break;
+				}
+				$output = substr($output, 0, -1);
+				$sender->sendMessage($output);
+				break;
+
+			case "message":
+			case "msg":
+			case "m":
+				if(!$sender instanceof Player){
+					$sender->sendMessage(Main::$prefix . "인게임에서만 사용 가능합니다.");
 					return true;
-				case "command":
-				case "cmd":
-					if(!$sender->hasPermission("npc.command.npc.command")){
-						$sender->sendMessage(new TranslationContainer(TextFormat::RED . "%commands.generic.permission"));
-						return true;
-					}
-
-					$this->cmdQueue[$sender->getName()] = trim(implode(" ", $params));
-					$sender->sendMessage("Touch NPC you want to set command.");
+				}
+				if(!$sender->hasPermission("npc.command.npc.message")){
+					$sender->sendMessage(Main::$prefix . "이 명령을 사용할 권한이 없습니다.");
 					return true;
-			}
-		}
-		return false;
-	}
+				}
+				$message = trim(implode(" ", $params));
+				$sender->sendMessage(Main::$prefix . "메세지를 변경할 NPC를 터치하세요.");
 
-	public function onDisable(){
-		$this->save();
-	}
+				NPC::setQueue($sender, function(NPC $npc) use($sender, $message){
+					$npc->setMessage($message);
+					$sender->sendMessage(Main::$prefix . "NPC \"" . $npc->getNameTag() . "\" 의 메세지를 \"" . $message . "\" (으)로 변경하였습니다.");
+					NPC::removeQueue($sender);
+				});
+				break;
 
-	public function save(){
-		$dir = scandir($this->getDataFolder()."skins/");
-		foreach($dir as $file){
-			if($file !== "." and $file !== ".."){
-				unlink($this->getDataFolder()."skins/".$file);
-			}
-		}
+			case "command":
+			case "cmd":
+				if(!$sender instanceof Player){
+					$sender->sendMessage(Main::$prefix . "인게임에서만 사용 가능합니다.");
+					return true;
+				}
+				if(!$sender->hasPermission("npc.command.npc.command")){
+					$sender->sendMessage(Main::$prefix . "이 명령을 사용할 권한이 없습니다.");
+					return true;
+				}
+				$command = trim(implode(" ", $params));
+				$sender->sendMessage(Main::$prefix . "명령어를 변경할 NPC를 터치하세요.");
 
-		$save = [];
-		foreach($this->npc as $npc){
-			$data = $npc->getSaveData();
-			file_put_contents($this->getDataFolder()."skins/".$data[6].".skin", $npc->getSkin());
-			$save[] = $data;
+				NPC::setQueue($sender, function(NPC $npc) use($sender, $command){
+					$npc->setCommand($command);
+					$sender->sendMessage(Main::$prefix . "NPC \"" . $npc->getNameTag() . "\" 의 명령어를 \"" . $command . "\" (으)로 변경하였습니다.");
+					NPC::removeQueue($sender);
+				});
+				break;
+
+			// Open NPC's Inventory, But not implemented completely
+			//
+			//case "inventory":
+			//case "inven":
+			//case "i":
+			//	if(!$sender instanceof Player){
+			//		$sender->sendMessage(Main::$prefix . "인게임에서만 사용 가능합니다.");
+			//		return true;
+			//	}
+			//	if(!$sender->hasPermission("npc.command.npc.inventory")){
+			//		$sender->sendMessage(Main::$prefix . "이 명령을 사용할 권한이 없습니다.");
+			//		return true;
+			//	}
+			//	$sender->sendMessage(Main::$prefix . "인벤토리를 편집할 NPC를 터치하세요.");
+			//	NPC::setQueue($sender, function(NPC $npc) use($sender){
+			//		$sender->addWindow($npc->getInventory());
+			//		NPC::removeQueue($sender);
+			//	});
+			//	break;
+
+			case "change":
+				if(!$sender instanceof Player){
+					$sender->sendMessage(Main::$prefix . "인게임에서만 사용 가능합니다.");
+					return true;
+				}
+				if(!$sender->hasPermission("npc.command.npc.skin")){
+					$sender->sendMessage(Main::$prefix . "이 명령을 사용할 권한이 없습니다.");
+					return true;
+				}
+
+				$sender->sendMessage(Main::$prefix . "모습을 변경할 NPC를 터치하세요.");
+				NPC::setQueue($sender, function(NPC $npc) use($sender){
+					$npc->getInventory()->setItemInHand($sender->getInventory()->getItemInHand());
+					$npc->getInventory()->setArmorContents($sender->getInventory()->getArmorContents());
+					$npc->setSkin(clone $sender->getSkin());
+
+					$npc->getInventory()->sendHeldItem($npc->getViewers());
+					$npc->getInventory()->sendArmorContents($npc->getViewers());
+					$npc->sendSkin($npc->getViewers());
+					$sender->sendMessage(Main::$prefix . "NPC \"" . $npc->getNameTag() . "\" 의 모습을 변경하였습니다.");
+					NPC::removeQueue($sender);
+				});
+				break;
+
+			default:
+				$sender->sendMessage(Main::$prefix . "사용법 : /npc <create|list|remove|message|command|change>");
 		}
-		file_put_contents($this->getDataFolder()."npc.dat", serialize($save));
+		return true;
 	}
 }

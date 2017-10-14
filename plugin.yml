@@ -1,33 +1,41 @@
 name: NPC
 author: onebone
-api: [3.0.0-ALPHA7]
+version: 2.0
 main: onebone\npc\Main
-version: "1.4"
-
-
-permissions:
- npc:
-  description: Includes all permissions of NPC
-  children:
-   npc.command:
-    description: Allows all commands of NPC
-    children:
-     npc.command.npc:
-      description: Allows player to use /npc
-      children:
-       npc.command.npc.create:
-        description: Allows player to use /npc create
-       npc.command.npc.remove:
-        description: Allows player to use /npc remove
-       npc.command.npc.list:
-        description: Allows player to use /npc list
-       npc.command.npc.message:
-        description: Allows player to use /npc message
-       npc.command.npc.command:
-        description: Allows player to use /npc command
+api:
+- 3.0.0-ALPHA7
+- 3.0.0-ALPHA8
+- 3.0.0-ALPHA9
+- 3.0.0-ALPHA10
+- 3.0.0-ALPHA11
+- 3.0.0-ALPHA12
+- 3.0.0-ALPHA13
+- 3.0.0-ALPHA14
+- 3.0.0-ALPHA15
 
 commands:
  npc:
-  description: NPC master command
-  usage: /npc <create|remove|list|message|command>
   permission: npc.command.npc;npc.command.npc.create;npc.command.npc.remove;npc.command.npc.list;npc.command.npc.message;npc.command.npc.command;
+
+permissions:
+ npc:
+  default: op
+  children:
+   npc.command:
+    default: op
+    children:
+     npc.command.npc:
+      default: op
+      children:
+       npc.command.npc.create:
+        default: op
+       npc.command.npc.remove:
+        default: op
+       npc.command.npc.list:
+        default: op
+       npc.command.npc.message:
+        default: op
+       npc.command.npc.command:
+        default: op
+       npc.command.npc.change:
+        default: op

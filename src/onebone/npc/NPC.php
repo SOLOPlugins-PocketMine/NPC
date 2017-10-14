@@ -19,61 +19,99 @@
 
 namespace onebone\npc;
 
-use pocketmine\entity\Entity;
-use pocketmine\level\Location;
-use pocketmine\utils\UUID;
-use pocketmine\utils\TextFormat;
-use pocketmine\item\Item;
 use pocketmine\Player;
+use pocketmine\entity\Entity;
+use pocketmine\entity\Skin;
+use pocketmine\event\entity\EntityDamageEvent;
+use pocketmine\event\entity\EntityDamageByEntityEvent;
+use pocketmine\level\Level;
+use pocketmine\item\Item;
+use pocketmine\inventory\InventoryHolder;
 use pocketmine\math\Vector2;
-use pocketmine\network\mcpe\protocol\MovePlayerPacket;
+use pocketmine\nbt\NBT;
+use pocketmine\nbt\tag\CompoundTag;
+use pocketmine\nbt\tag\ListTag;
+use pocketmine\nbt\tag\StringTag;
+use pocketmine\network\mcpe\protocol\MoveEntityPacket;
 use pocketmine\network\mcpe\protocol\AddPlayerPacket;
 use pocketmine\network\mcpe\protocol\PlayerListPacket;
+use pocketmine\network\mcpe\protocol\PlayerSkinPacket;
 use pocketmine\network\mcpe\protocol\RemoveEntityPacket;
+use pocketmine\network\mcpe\protocol\types\PlayerListEntry;
+use pocketmine\utils\UUID;
 
-class NPC extends Location{
-	/** @var  Main */
-	private $plugin;
-	private $eid;
-	private $skin, $skinId, $name;
-	private $item;
-	private $message, $command;
+class NPC extends Entity implements InventoryHolder{
 
+	private static $queue = [];
+
+	public static function setQueue(Player $player, callable $func){
+		self::$queue[$player->getId()] = $func;
+	}
+
+	public static function getQueue(Player $player){
+		return self::$queue[$player->getId()] ?? null;
+	}
+
+	public static function removeQueue(Player $player){
+		if(isset(self::$queue[$player->getId()])){
+			unset(self::$queue[$player->getId()]);
+			return true;
+		}
+		return false;
+	}
+
+
+
+	/** @var UUID */
 	private $uuid;
 
-	public function __construct(Main $plugin, Location $loc, $name, $skin, $skinId, Item $item, $message = "", $command = null){
-		parent::__construct($loc->x, $loc->y, $loc->z, $loc->yaw, $loc->pitch, $loc->level);
+	/** @var Skin */
+	private $skin;
 
-		$this->plugin = $plugin;
+	/** @var NPCInventory */
+	private $inventory;
 
-		$this->eid = Entity::$entityCount++;
-		$this->skin = $skin;
-		$this->skinId = $skinId;
-		$this->name = $name;
-		$this->item = $item;
-		$this->message = $message;
-		$this->command = $command;
+	/** @var string */
+	private $message;
 
+	/** @var string */
+	private $command;
+
+	protected function initEntity(){
 		$this->uuid = UUID::fromRandom();
+
+		$this->setGenericFlag(self::DATA_FLAG_ALWAYS_SHOW_NAMETAG, true);
+		$this->setGenericFlag(self::DATA_FLAG_CAN_SHOW_NAMETAG, true);
+
+		$this->inventory = new NPCInventory($this);
+		if(isset($this->namedtag->Inventory) && $this->namedtag->Inventory instanceof ListTag){
+			foreach($this->namedtag->Inventory as $i => $item){
+				$this->inventory->setItem($item["Slot"], Item::nbtDeserialize($item));
+			}
+		}
+
+		parent::initEntity();
+
+		if(isset($this->namedtag->Skin)){
+			$this->setSkin(new Skin(
+				$this->namedtag->Skin["Name"] ?? "",
+				$this->namedtag->Skin["Data"] ?? ""
+			));
+		}
+		isset($this->namedtag->Message) ? $this->message = $this->namedtag["Message"] : $this->message = "";
+		isset($this->namedtag->Command) ? $this->command = $this->namedtag["Command"] : $this->command = "";
+
 	}
 
-	public function getName(){
-		return $this->name;
-	}
-
-	public function setMessage($msg){
-		$this->message = $msg;
+	public function setMessage(string $message){
+		$this->message = $message;
 	}
 
 	public function getMessage(){
 		return $this->message;
 	}
 
-	public function setCommand($command){
-		if(trim($command) === ""){
-			$this->command = $command;
-		}
-
+	public function setCommand(string $command){
 		$this->command = $command;
 	}
 
@@ -81,149 +119,137 @@ class NPC extends Location{
 		return $this->command;
 	}
 
+	public function getInventory(){
+		return $this->inventory;
+	}
+
+	public function setSkin(Skin $skin){
+		if(!$skin->isValid()){
+			throw new \InvalidStateException("Specified skin is not valid, must be 8KiB or 16 KiB");
+		}
+		$this->skin = $skin;
+	}
+
+	public function sendSkin(array $targets){
+		$pk = new PlayerSkinPacket();
+		$pk->uuid = $this->uuid;
+		$pk->skin = $this->skin;
+		$this->server->broadcastPacket($targets, $pk);
+	}
+
 	public function getSkin(){
 		return $this->skin;
 	}
 
-	public function setHoldingItem(Item $item){
-		$this->item = $item->getId();
-		$this->meta = $item->getDamage();
-	}
-
-	public function getId(){
-		return $this->eid;
-	}
-
-	public function onInteract(Player $player){
-		if($this->message !== ""){
-			$player->sendMessage($this->message);
-		}
-
-		if($this->command !== null){
-			$this->plugin->getServer()->dispatchCommand($player, $this->command);
+	public function attack(EntityDamageEvent $source){
+		if($source instanceof EntityDamageByEntityEvent && $source->getDamager() instanceof Player){
+			$func = self::getQueue($source->getDamager());
+			if($func !== null){
+				$func($this);
+			}else{
+				if($this->message !== ""){
+					$source->getDamager()->sendMessage($this->message);
+				}
+				if($this->command !== ""){
+					$this->server->dispatchCommand($source->getDamager(), $this->command);
+				}
+			}
 		}
 	}
 
-	public function seePlayer(Player $target){
-		$pk = new MovePlayerPacket();
-		$pk->entityRuntimeId = $this->eid;
-		if($this->yaw === -1 and $target !== null){
-			$xdiff = $target->x - $this->x;
-			$zdiff = $target->z - $this->z;
-			$angle = atan2($zdiff, $xdiff);
-			$pk->yaw = (($angle * 180) / M_PI) - 90;
-		}else{
-			$pk->yaw = $this->yaw;
-		}
-		if($this->pitch === -1 and $target !== null){
-			$ydiff = $target->y - $this->y;
+	public function onUpdate(int $currentTick) : bool{
+		//$this->lastUpdate = $currentTick;
 
-			$vec = new Vector2($this->x, $this->z);
-			$dist = $vec->distance($target->x, $target->z);
-			$angle = atan2($dist, $ydiff);
-			$pk->pitch = (($angle * 180) / M_PI) - 90;
-		}else{
-			$pk->pitch = $this->pitch;
-		}
-		$pk->x = $this->x;
-		$pk->y = $this->y + 1.62;
-		$pk->z = $this->z;
-		$pk->bodyYaw = $pk->yaw;
-		//$pk->onGruond = 0;
+		//$this->timings->startTiming();
 
-		$target->dataPacket($pk);
+		//$distance = 4;
+
+		//$minX = intval(floor(($this->x - $distance) / 16));
+		//$minZ = intval(floor(($this->z - $distance) / 16));
+		//$maxX = intval(ceil(($this->x + $distance) / 16));
+		//$maxZ = intval(ceil(($this->z + $distance) / 16));
+		//for($x = $minX; $x <= $maxX; ++$x){
+		//	for($z = $minZ; $z <= $maxZ; ++$z){
+		//		foreach($this->getLevel()->getChunkEntities($x, $z) as $target){
+		//			if($target instanceof Player && $target->distance($this) < $distance){
+		//				$pk = new MoveEntityPacket();
+		//				$pk->entityRuntimeId = $this->id;
+		//				$pk->position = $this->getOffsetPosition($this);
+		//				$pk->pitch = (atan2((new Vector2($this->x, $this->z))->distance($target->x, $target->z), $target->y + $target->getEyeHeight() - $this->y) * 180 / M_PI) - 90;
+		//				$pk->yaw = $pk->headYaw = (atan2($target->z - $this->z, $target->x - $this->x) * 180 / M_PI) - 90;
+		//				$target->dataPacket($pk);
+		//			}
+		//		}
+		//	}
+		//}
+
+		//$this->timings->stopTiming();
+
+		return false; // do not tick NPC
 	}
 
-	public function spawnTo(Player $target){
+	public function saveNBT(){
+		parent::saveNBT();
+
+		$this->namedtag->Message = new StringTag("Message", $this->message);
+		$this->namedtag->Command = new StringTag("Command", $this->command);
+
+		$this->namedtag->Inventory = new ListTag("Inventory", [], NBT::TAG_Compound);
+		if($this->inventory !== null){
+			$slotCount = $this->inventory->getSize();
+			for($slot = 0; $slot < $slotCount; ++$slot){
+				$item = $this->inventory->getItem($slot);
+				if($item->getId() !== Item::AIR){
+					$this->namedtag->Inventory[$slot] = $item->nbtSerialize($slot);
+				}
+			}
+		}
+
+		if($this->skin !== null){
+			$this->namedtag->Skin = new CompoundTag("Skin", [
+				new StringTag("Data", $this->skin->getSkinData()),
+				new StringTag("Name", $this->skin->getSkinId())
+			]);
+		}
+	}
+
+	public function spawnTo(Player $player){
 		$pk = new AddPlayerPacket();
 		$pk->uuid = $this->uuid;
-		$pk->username = $this->name;
-		$pk->entityRuntimeId = $this->eid;
-		$pk->x = $this->x;
-		$pk->y = $this->y;
-		$pk->z = $this->z;
-		if($this->yaw === -1 and $target !== null){
-			$xdiff = $target->x - $this->x;
-			$zdiff = $target->z - $this->z;
-			$angle = atan2($zdiff, $xdiff);
-			$pk->yaw = (($angle * 180) / M_PI) - 90;
-		}else{
-			$pk->yaw = $this->yaw;
-		}
-		if($this->pitch === -1 and $target !== null){
-
-		}else{
-			$pk->pitch = $this->pitch;
-		}
-		$pk->item = $this->item;
-		$pk->metadata =
-		[
-			Entity::DATA_FLAGS => [
-				Entity::DATA_TYPE_LONG, 1 << Entity::DATA_FLAG_ALWAYS_SHOW_NAMETAG
-										^ 1 << Entity::DATA_FLAG_CAN_SHOW_NAMETAG
-			],
-			Entity::DATA_NAMETAG => [
-					Entity::DATA_TYPE_STRING, $this->name
-			],
-			Entity::DATA_LEAD_HOLDER_EID => [
-						Entity::DATA_TYPE_LONG, -1
-			]
-		];
-		$target->dataPacket($pk);
-
-		$pk = new PlayerListPacket();
-		$pk->type = PlayerListPacket::TYPE_ADD;
-
-		$pk->entries = [
-			[
-				$this->uuid, $this->eid, TextFormat::GRAY."NPC: ".$this->name, $this->skinId, $this->skin
-			]
-		];
-
-		$target->dataPacket($pk);
-	}
-
-	public function removeFrom(Player $player){
-		$pk = new RemoveEntityPacket();
-		$pk->entityUniqueId = $this->eid;
-
+		$pk->username = $this->getNameTag();
+		$pk->entityRuntimeId = $this->getId();
+		$pk->position = $this->asVector3();
+		$pk->pitch = $this->pitch;
+		$pk->yaw = $this->yaw;
+		$pk->item = $this->inventory->getItemInHand();
+		$pk->metadata = $this->dataProperties;
 		$player->dataPacket($pk);
 
-		$pk = new PlayerListPacket();
-		$pk->type = PlayerListPacket::TYPE_REMOVE;
-		$pk->entries = [
-			[
-				$this->uuid, $this->eid, TextFormat::GRAY."NPC: ".$this->name, $this->skinId, $this->skin
-			]
-		];
-		$player->dataPacket($pk);
-	}
-
-	public function remove(){
-		foreach($this->level->getPlayers() as $player){
-			$this->removeFrom($player);
+		if($this->skin !== null || $this->skin->isValid()){
+			$pk = new PlayerListPacket();
+			$pk->type = PlayerListPacket::TYPE_ADD;
+			$pk->entries[] = PlayerListEntry::createAdditionEntry($this->uuid, $this->id, "§7[NPC] " . $this->getNameTag(), $this->skin);
+			$player->dataPacket($pk);
 		}
+
+		$this->inventory->sendArmorContents($player);
+
+		parent::spawnTo($player);
 	}
 
-	public function getSaveData(){
-		return [
-			$this->x, $this->y, $this->z, $this->level->getFolderName(),
-			$this->yaw, $this->pitch,
-			$this->eid, $this->item->getId(), $this->item->getDamage(), $this->name, $this->skinId,
-			$this->message, $this->command
-		];
-	}
+	public function despawnFrom(Player $player, bool $send = true){
+		if(isset($this->hasSpawned[$player->getId()])){
+			if($send){
+				$pk = new RemoveEntityPacket();
+				$pk->entityUniqueId = $this->id;
+				$player->dataPacket($pk);
 
-	public static function createNPC(Main $plugin, $data){
-		$plugin->getServer()->loadLevel($data[3]);
-
-		return new NPC($plugin, new Location($data[0], $data[1], $data[2], $data[4], $data[5], $plugin->getServer()->getLevelByName($data[3])), // location
-			$data[9], // name
-			$data[6], // skin
-			$data[10], // skinId
-			Item::get($data[7], $data[8]), // item
-			$data[11], // message
-			$data[12] ?? null // command
-		);
+				$pk = new PlayerListPacket();
+				$pk->type = PlayerListPacket::TYPE_REMOVE;
+				$pk->entries[] = PlayerListEntry::createRemovalEntry($this->uuid);
+				$player->dataPacket($pk);
+			}
+			unset($this->hasSpawned[$player->getId()]);
+		}
 	}
 }
