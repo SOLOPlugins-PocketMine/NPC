@@ -213,7 +213,7 @@ class NPC extends Entity implements InventoryHolder{
 		}
 	}
 
-	public function spawnTo(Player $player){
+	protected function sendSpawnPacket(Player $player) : void{
 		$pk = new AddPlayerPacket();
 		$pk->uuid = $this->uuid;
 		$pk->username = $this->getNameTag();
@@ -233,23 +233,13 @@ class NPC extends Entity implements InventoryHolder{
 		}
 
 		$this->inventory->sendArmorContents($player);
-
-		parent::spawnTo($player);
 	}
 
-	public function despawnFrom(Player $player, bool $send = true){
-		if(isset($this->hasSpawned[$player->getId()])){
-			if($send){
-				$pk = new RemoveEntityPacket();
-				$pk->entityUniqueId = $this->id;
-				$player->dataPacket($pk);
+	public function despawnFrom(Player $player, bool $send = true){$pk = new PlayerListPacket();
+		$pk->type = PlayerListPacket::TYPE_REMOVE;
+		$pk->entries[] = PlayerListEntry::createRemovalEntry($this->uuid);
+		$player->dataPacket($pk);
 
-				$pk = new PlayerListPacket();
-				$pk->type = PlayerListPacket::TYPE_REMOVE;
-				$pk->entries[] = PlayerListEntry::createRemovalEntry($this->uuid);
-				$player->dataPacket($pk);
-			}
-			unset($this->hasSpawned[$player->getId()]);
-		}
+		parent::despawnFrom($player, $send);
 	}
 }
